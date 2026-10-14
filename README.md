@@ -27,10 +27,10 @@
 | 环节 | 关键结果 |
 | --- | --- |
 | 训练 | COCO128 / YOLO11n / 30 epochs / CPU，**mAP50 = 0.7111，mAP50-95 = 0.5529** |
-| 模型导出 | ONNX（opset 12, imgsz 416, simplify），大小约 10.2 MB，输入 `[1,3,416,416]`，输出 `[1,84,3549]` |
+| 模型导出 | ONNX（opset 12, simplify）；**官方 `yolo11n` @640** → `models/yolo11n.onnx`（10.2 MB，输入 `[1,3,640,640]`，输出 `[1,84,8400]`）；另有官方 `yolo11s` @640（36.3 MB）与自训练 @416 作对照 |
 | Python 推理 | 基于 `ultralytics` + `cv2`，视频流平均 **≈ 41 FPS** |
 | Rust 推理 | 基于 `ort` + `image`，release 模式基准 **≈ 61.7 FPS**（pre 7.1ms / infer 8.8ms / post 0.3ms） |
-| 后端服务 | FastAPI，`/api/detect` 热态单帧 ≈ 15ms，WebSocket 单帧 ≈ 12ms |
+| 后端服务 | FastAPI，默认加载官方 `yolo11n` @640，热态单帧 ≈ 30ms（约 30 FPS）；改用识别更强的官方 `yolo11s` 则 ≈ 175ms（约 6 FPS），实时框滞后明显 |
 | Web / 桌面 | 摄像头实时画框，Electron 内嵌前端并可自动拉起后端 |
 
 > 全部在 **无 CUDA、纯 CPU**（Intel i7-13650HX，Intel 核显）环境下完成。
@@ -55,13 +55,16 @@
 
 - **数据集**：COCO128 只有 128 张图，是 COCO 官方给的"冒烟测试集"。它足够小，能保证纯 CPU 上几分钟内完成一次完整训练；同时又覆盖 80 类真实场景，结果有说服力。作业目标是"跑通"，不是"刷榜"，选它性价比最高。
 - **模型**：YOLO11n 是 Ultralytics 最新的 nano 级模型，参数量最小、CPU 推理最快，适合作为端到端演示的基线。
-- **训练参数**：`imgsz=416`（比默认 640 更省算力，且与后续 ONNX 推理尺寸对齐）、`batch=16`、`epochs=30`、`cache=True`（小数据集全量缓存到内存）。这些都是为"CPU 可跑 + 结果可用"服务的折中。
+- **训练参数**：`imgsz=416`（比默认 640 更省算力）、`batch=16`、`epochs=30`、`cache=True`（小数据集全量缓存到内存）。这些都是为"CPU 可跑 + 结果可用"服务的折中。
+
+> 注：上述自训练模型仅用于**跑通训练→导出→推理流程**，识别能力偏弱（召回 ≈ 0.65）。因此推理侧**默认改用官方全 COCO 预训练权重**：最终选用轻量、跟手更及时的官方 `yolo11n`（期间曾试过识别更强但单帧 ≈175ms 的官方 `yolo11s`，因实时框滞后明显而回退，见 [3.3](#33-为什么把模型导出成-onnx)、工程日志阶段六~八），自训练产物保留作对照。
 
 ### 3.3 为什么把模型导出成 ONNX
 
 - **跨语言**：Rust（`ort`）、Python（`onnxruntime`）、后端都直接吃 ONNX，无需各自带一套 PyTorch。
 - **性能**：ONNX Runtime 的图优化 + 算子融合在 CPU 上通常比直接跑 PyTorch 更快，也更适合部署。
-- **固定尺寸 + 简化**：导出时 `dynamic=False` 固定 `416×416`、`simplify=True` 去掉冗余算子，让推理路径最短。
+- **固定尺寸 + 简化**：导出时 `dynamic=False` 固定输入尺寸（官方模型用 `640×640`）、`simplify=True` 去掉冗余算子，让推理路径最短。
+- **权重选型**：默认导出**官方预训练权重**（全 COCO 80 类）而非自训练 `best.pt`——后者仅 128 张图微调，识别明显偏弱。默认选官方 `yolo11n` @640（CPU 单帧 ≈30ms，框跟随及时）；官方 `yolo11s` @640 识别更强但单帧 ≈175ms，实时框滞后明显，仅在离线/高精度场景显式指定（详见工程日志阶段六~八）。
 
 ### 3.4 为什么"Python 快速版 + Rust 优化版"两套推理
 
@@ -94,13 +97,15 @@ Rust 版刻意做到：**letterbox 预处理 → 模型推理 → 解码/YOLO �
 flowchart LR
     subgraph 训练侧
         A[COCO128] --> B[YOLO11n 训练<br/>ultralytics/torch]
-        B --> C[best.pt]
-        C --> D[导出 ONNX<br/>models/yolo11n_coco128.onnx]
+        B --> C[best.pt<br/>自训练·识别较弱]
+        P[官方 yolo11n.pt / yolo11s.pt<br/>全 COCO·识别强] --> D[导出 ONNX]
+        C --> D
     end
+    D --> M[models/<br/>yolo11n.onnx 官方·默认<br/>yolo11s.onnx 官方·高精度<br/>yolo11n_coco128.onnx 自训练]
 
-    D --> E[Python 推理<br/>inference_python]
-    D --> F[Rust 推理<br/>inference_rust / ort]
-    D --> G[FastAPI 服务<br/>server/app.py]
+    M --> E[Python 推理<br/>inference_python]
+    M --> F[Rust 推理<br/>inference_rust / ort]
+    M --> G[FastAPI 服务<br/>server/app.py]
 
     G -- HTTP /api/detect --> H[Web 前端<br/>Vue3 + Vite]
     G -- WS /ws/detect --> H
@@ -184,10 +189,15 @@ python training/train.py
 ### 2. 导出 ONNX
 
 ```powershell
+# 官方预训练权重（默认，轻量跟手）：yolo11n → models/yolo11n.onnx @640
+python training/export_onnx.py --weights yolo11n.pt --imgsz 640 --out models/yolo11n.onnx
+# 高精度选项：官方 yolo11s → models/yolo11s.onnx @640（识别更强但单帧 ≈175ms）
+python training/export_onnx.py --weights yolo11s.pt --imgsz 640 --out models/yolo11s.onnx
+# 自训练权重（COCO128 微调，作对照）→ models/yolo11n_coco128.onnx @416
 python training/export_onnx.py --weights runs/train/coco128_yolo11n/weights/best.pt
 ```
 
-产物：`models/yolo11n_coco128.onnx`。
+产物：`models/yolo11n.onnx`（官方 @640，**默认使用**）、`models/yolo11s.onnx`（官方 @640，高精度）与 `models/yolo11n_coco128.onnx`（自训练 @416）。
 
 ### 3. Python 实时推理
 
@@ -242,11 +252,11 @@ npm run dev      # 开发模式：连接 Vite 开发服务器
 ## 七、各环节实现要点（思路层面）
 
 - **训练**：在 `import ultralytics` 之前把 `YOLO_CONFIG_DIR` 重定向到工作区内，避免框架把配置/字体写进用户目录；小数据集开启 `cache=True`；训练结束再跑一次 `model.val()` 打印 mAP。
-- **导出**：`opset=12 + imgsz=416 + simplify=True + dynamic=False`，并统一复制到 `models/` 便于其他模块引用。
+- **导出**：`opset=12 + imgsz=640（官方）/416（自训练）+ simplify=True + dynamic=False`，并统一复制到 `models/` 便于其他模块引用；权重按"官方 s > 官方 n > 自训练"优先级自动选择。
 - **Python 推理**：统一用 `model.predict(stream=...)` 处理摄像头/视频流，滑动平均估算 FPS；同一份代码可切 `--engine pt|onnx`。
 - **Rust 推理**：手写 letterbox 预处理 → `ort` 推理 → 解码（YOLOv8/11 无 objectness，取 80 类最大分）→ 类别内 NMS → `imageproc` 画框；`ort` 会话复用，避免每帧重复加载模型。
 - **后端**：模型在 `startup` 时加载一次；推理是 CPU 密集操作，用 `asyncio.to_thread` 放到线程池，避免阻塞事件循环；开启 CORS 方便前端开发。
-- **前端**：`getUserMedia(640×480)` 抓帧 → `canvas.toBlob` 压成 JPEG(0.7) → WebSocket 发送 ArrayBuffer；收到结果按 `object-fit: contain` 的比例换算坐标再画框。
+- **前端**：`getUserMedia(1280×720)` 抓帧 → `canvas.toBlob` 压成 JPEG(0.85) → WebSocket 发送 ArrayBuffer；收到结果按 `object-fit: contain` 的比例换算坐标再画框。
 - **桌面端**：启动时先 `healthCheck()`，后端没起来才 `spawn` uvicorn，并轮询等待就绪；生产环境用 `loadFile(web/dist/index.html)`（Vite `base:'./'` 保证 `file://` 下资源可加载）；退出时 kill 后端子进程。
 
 ---
@@ -254,6 +264,7 @@ npm run dev      # 开发模式：连接 Vite 开发服务器
 ## 八、已知限制与后续优化
 
 - **训练规模小**：COCO128 仅用于跑通流程，真实业务需换更大数据集并做数据增强调参。
+- **自训练模型识别弱**：COCO128 仅 128 张图 / 30 轮，召回 ≈ 0.65（约 1/3 目标漏检）；故**默认改用官方全 COCO 预训练权重**（最终用轻量跟手的 `yolo11n` @640；识别更强但单帧 ≈175ms 的 `yolo11s` 因实时框滞后明显未作默认），自训练产物仅作流程对照。
 - **纯 CPU 推理**：如需更高吞吐可换 TensorRT / OpenVINO / DirectML，或启用 INT8 量化。
 - **Rust 关键路径已优化**（LTO、`codegen-units=1`、`opt-level=3`），但摄像头采集目前仍靠 `nokhwa`，跨平台兼容性可再打磨。
 - **服务端并发**：当前单模型串行推理，高并发场景可考虑多实例/批处理。

@@ -23,7 +23,7 @@ struct Cli {
     #[arg(long, default_value_os_t = default_model())]
     model: PathBuf,
     /// 推理输入尺寸（需与导出的 ONNX 一致）
-    #[arg(long, default_value_t = 416)]
+    #[arg(long, default_value_t = 640)]
     size: usize,
     /// 置信度阈值
     #[arg(long, default_value_t = 0.25)]

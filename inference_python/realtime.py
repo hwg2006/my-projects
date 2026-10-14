@@ -18,16 +18,21 @@ import cv2
 
 # 以文件方式运行时 sys.path 首项是脚本目录，先补上仓库根目录再导入共享配置
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from project_config import DEFAULT_ONNX, DEFAULT_PT  # noqa: E402
+from project_config import (  # noqa: E402
+    DEFAULT_ONNX,
+    DEFAULT_PT,
+    OFFICIAL_ONNX,
+    OFFICIAL_PT,
+)
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--source", default="0", help="0=摄像头 / 视频路径 / 图片路径 / 目录")
     p.add_argument("--engine", choices=["pt", "onnx"], default="pt")
-    p.add_argument("--weights", default=None, help="自定义权重，默认取训练产出")
-    p.add_argument("--imgsz", type=int, default=416)
-    p.add_argument("--conf", type=float, default=0.25)
+    p.add_argument("--weights", default=None, help="自定义权重，默认取官方预训练权重")
+    p.add_argument("--imgsz", type=int, default=640)
+    p.add_argument("--conf", type=float, default=0.15)
     p.add_argument("--save", default=None, help="保存目录（不填则只显示）")
     p.add_argument("--no-show", action="store_true", help="不弹窗显示（无显示器环境）")
     return p.parse_args()
@@ -37,8 +42,18 @@ def resolve_weights(args: argparse.Namespace) -> str:
     if args.weights:
         return args.weights
     if args.engine == "onnx":
-        return str(DEFAULT_ONNX if DEFAULT_ONNX.exists() else DEFAULT_PT)
-    return str(DEFAULT_PT if DEFAULT_PT.exists() else "yolo11n.pt")
+        for p in (OFFICIAL_ONNX, DEFAULT_ONNX):
+            if p.exists():
+                return str(p)
+        # 无可用 ONNX 时退回 pt
+        for p in (OFFICIAL_PT, DEFAULT_PT):
+            if p.exists():
+                return str(p)
+        return "yolo11n.pt"
+    for p in (OFFICIAL_PT, DEFAULT_PT):
+        if p.exists():
+            return str(p)
+    return "yolo11n.pt"
 
 
 def normalize_source(src: str):

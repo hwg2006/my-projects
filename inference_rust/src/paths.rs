@@ -12,9 +12,14 @@ pub fn project_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// 默认 ONNX 模型路径。
+/// 默认 ONNX 模型路径：优先官方 yolo11n（CPU 单帧 ≈55ms，框跟随更及时），最后回退自训练产出。
 pub fn default_model() -> PathBuf {
-    project_root().join("models").join("yolo11n_coco128.onnx")
+    let models = project_root().join("models");
+    let official = models.join("yolo11n.onnx");
+    if official.exists() {
+        return official;
+    }
+    models.join("yolo11n_coco128.onnx")
 }
 
 /// 让 ort 的 `load-dynamic` 找到 onnxruntime.dll（优先复用 venv 里已下载的那份）。

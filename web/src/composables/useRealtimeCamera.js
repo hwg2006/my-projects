@@ -4,7 +4,9 @@ import { ref } from 'vue'
 import { openDetectSocket } from '../api'
 
 const TARGET_FPS = 30
-const JPEG_QUALITY = 0.7
+// 采集尺寸与压缩质量：640×480 的编码/传输开销远低于 720p，降低往返延迟让框更跟手；
+// 质量保持 0.85 以尽量少损失细节。
+const JPEG_QUALITY = 0.85
 const CAPTURE_SIZE = { width: 640, height: 480 }
 
 /**
@@ -58,14 +60,28 @@ export function useRealtimeCamera({ videoEl, onResult, onStatus } = {}) {
 
   async function start() {
     if (running.value) return
+    if (!navigator.mediaDevices?.getUserMedia) {
+      onStatus?.('当前环境不支持摄像头（请用系统浏览器经 http 打开）', false)
+      return
+    }
+    // 授权弹窗可能在别处或不显示，先给出反馈，并加超时避免点击后一直无响应
+    onStatus?.('正在请求摄像头权限…', false)
+    let timer = 0
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: CAPTURE_SIZE,
-        audio: false,
-      })
+      stream = await Promise.race([
+        navigator.mediaDevices.getUserMedia({ video: CAPTURE_SIZE, audio: false }),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('等待授权超时，请检查浏览器地址栏的摄像头权限弹窗')),
+            8000,
+          )
+        }),
+      ])
     } catch (e) {
       onStatus?.('无法访问摄像头: ' + e.message, false)
       return
+    } finally {
+      clearTimeout(timer)
     }
     videoEl.value.srcObject = stream
     await videoEl.value.play()
