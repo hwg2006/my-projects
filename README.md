@@ -126,6 +126,7 @@ flowchart LR
 ```
 yolo/
 ├─ project_config.py         # 仓库路径 / YOLO_CONFIG_DIR / 权重解析（各入口共用）
+├─ download_weights.py       # 一键下载官方权重并导出 ONNX（克隆后补齐权重用）
 ├─ training/                 # 训练与导出
 │  ├─ train.py               #   COCO128 上训练 YOLO11n
 │  └─ export_onnx.py         #   导出 ONNX 到 models/
@@ -155,7 +156,7 @@ yolo/
 │     ├─ App.vue             #   UI 组织与订阅
 │     └─ composables/        #   采集+WS 订阅 / 画框坐标换算
 ├─ desktop/                  # Electron 桌面端（内嵌 web/dist）
-├─ models/                   # 导出的 ONNX（.gitignore，需自行生成）
+├─ models/                   # 导出的 ONNX（.gitignore，用 download_weights.py 生成）
 ├─ datasets/                 # coco128.yaml（图片数据 .gitignore，可自动下载）
 ├─ runs/                     # 训练/推理输出（权重与演示帧 .gitignore）
 └─ ENGINEERING_LOG.md        # 工程日志
@@ -186,7 +187,18 @@ python training/train.py
 
 产物：`runs/train/coco128_yolo11n/weights/best.pt`，以及 `results.csv` / 曲线图。
 
-### 2. 导出 ONNX
+### 2. 下载权重并导出 ONNX
+
+> 权重不入库（`.gitignore` 排除 `*.pt` / `*.onnx`），克隆后 `models/` 是空的。**一键补齐**：
+
+```powershell
+python download_weights.py                 # 默认 yolo11n：下载 yolo11n.pt + 导出 models/yolo11n.onnx @640
+python download_weights.py --models yolo11n.pt yolo11s.pt   # 同时补 n 和 s（s 识别更强但单帧 ≈175ms）
+python download_weights.py --no-onnx       # 只下 .pt，不导出
+```
+已存在的文件会自动跳过，`--force` 可强制重新下载 / 重导。
+
+如需手工控制，也可以自行下载权重后按下述命令导出（与一键脚本等价）：
 
 ```powershell
 # 官方预训练权重（默认，轻量跟手）：yolo11n → models/yolo11n.onnx @640
